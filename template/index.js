@@ -1,161 +1,97 @@
-// ==UserScript==
-// @name         Local Message Editor
-// @author       You
-// @version      1.0.3
-// @description  Lets you locally edit any message's text (only you see it, gone on app restart)
-// @match        https://discord.com/*
-// @match        https://canary.discord.com/*
-// @match        https://ptb.discord.com/*
-// @run-at       document-start
-// ==/UserScript==
-
-import { React, ReactNative as RN } from "@vendetta/metro/common";
-import { after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
-import { findByProps, findByStoreName } from "@vendetta/metro";
+import { ReactNative as RN } from "@vendetta/metro/common";
+import { findByProps } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 
-const patches = [];
+storage.theme ??= "dark-purple";
 
-// Initialize storage
-storage.editedMessages ??= {};
-
-const MessageActions = findByProps("showMessageActionSheet");
-const MessageStore = findByStoreName("MessageStore");
-
-export const onLoad = () => {
-  // Add "Edit User Text (Local Only)" to the message long-press menu
-  patches.push(
-    after("showMessageActionSheet", MessageActions, (_, { message, navigation }) => {
-      if (!message || message.author?.id === "1") return; // skip system messages
-
-      const options = navigation.addButton?.("options") ?? navigation.getArgument?.("options");
-      if (!Array.isArray(options)) return;
-
-      options.push({
-        label: "Edit User Text (Local Only)",
-        icon: "ic_edit_24px",
-        onPress: () => showEditDialog(message),
-      });
-    })
-  );
-
-  // Patch rendered messages to show locally edited content
-  const MessageContent = findByProps("MessageContent")?.default ||
-                        findByProps("Message")?.default;
-
-  if (MessageContent) {
-    patches.push(
-      after("default", MessageContent, ([props], ret) => {
-        const msg = props?.message;
-        if (!msg?.id) return ret;
-
-        const edited = storage.editedMessages[msg.id];
-        if (edited === undefined) return ret;
-
-        try {
-          // Most common structures across Discord updates
-          if (ret?.props?.children?.props?.content) {
-            ret.props.children.props.content = edited;
-          }
-          if (ret?.props?.content) {
-            ret.props.content = edited;
-          }
-          if (ret?.props?.children?.props?.children?.props?.content) {
-            ret.props.children.props.children.props.content = edited;
-          }
-          // Newer structure (2025)
-          if (Array.isArray(ret?.props?.children)) {
-            const textNode = ret.props.children.find(c => c?.props?.content);
-            if (textNode) textNode.props.content = edited;
-          }
-        } catch (e) {
-          console.warn("[LocalMessageEditor] Failed to patch message render:", e);
-        }
-
-        return ret;
-      })
-    );
-  }
-
-  showToast("Local Message Editor Loaded", "ic_check");
+const themes = {
+  "dark-purple": `
+    --background-primary: #1a001a;
+    --background-secondary: #120012;
+    --background-tertiary: #0a000a;
+    --channels-default: #d4b3ff;
+    --text-normal: #e6ccff;
+    --header-primary: #ffffff;
+    --brand-experiment: #9f6bff;
+  `,
+  "amoled": `
+    --background-primary: #000000;
+    --background-secondary: #000000;
+    --background-tertiary: #000000;
+    --channels-default: #ffffff;
+    --text-normal: #ffffff;
+  `,
+  "nord": `
+    --background-primary: #2e3440;
+    --background-secondary: #3b4252;
+    --background-tertiary: #434c5e;
+    --channels-default: #d8dee9;
+    --text-normal: #eceff4;
+    --brand-experiment: #88c0d0;
+  `,
+  "dracula": `
+    --background-primary: #282a36;
+    --background-secondary: #21222c;
+    --background-tertiary: #191a21;
+    --text-normal: #f8f8f2;
+    --brand-experiment: #bd93f9;
+  `,
+  "sunset": `
+    --background-primary: #ff6b6b;
+    --background-secondary: #ee5a52;
+    --background-tertiary: #c44569;
+    --text-normal: #ffffff;
+    --brand-experiment: #feca57;
+  `
 };
 
-function showEditDialog(message) {
-  const current = storage.editedMessages[message.id] ?? message.content ?? "";
+let styleSheet;
 
-  RN.Alert.prompt(
-    "Edit Message (Local Only)",
-    "Only you see this • disappears on restart",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Save",
-        onPress: (text) => {
-          const trimmed = text?.trim();
-          if (!trimmed || trimmed === message.content) {
-            delete storage.editedMessages[message.id];
-            showToast("Edit removed", "ic_close");
-          } else {
-            storage.editedMessages[message.id] = trimmed;
-            showToast("Saved locally", "ic_check");
-          }
-
-          // Force a tiny update so the message re-renders instantly
-          setTimeout(() => {
-            try {
-              MessageStore.getState()?._actionHandler?.MESSAGE_UPDATE?.({
-                message: { ...message, edited_timestamp: new Date().toISOString() },
-              });
-            } catch {}
-          }, 100);
-        },
-      },
-    ],
-    "plain-text",
-    current,
-    "message-content"
-  );
+function applyTheme() {
+  if (styleSheet) styleSheet.remove();
+  const css = `:root {${themes[storage.theme]}}`;
+  styleSheet = RN.StyleSheet.create({ theme: { css } }).theme;
 }
 
-export function Settings() {
-  const count = Object.keys(storage.editedMessages || {}).length;
+export const onLoad = () => {
+  applyTheme();
+  showToast("theme loaded", "ic_theme");
+};
 
+export function Settings() {
   return (
     <RN.ScrollView style={{ flex: 1, padding: 16 }}>
-      <RN.View style={{ backgroundColor: "#2b2d31", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <RN.Text style={{ color: "#fff", fontSize: 20, fontWeight: "bold", marginBottom: 8 }}>
-          Local Message Editor
-        </RN.Text>
-        <RN.Text style={{ color: "#b5bac1" }}>
-          {count === 0 ? "No local edits yet" : `Edited ${count} message(s) locally`}
-        </RN.Text>
-      </RN.View>
+      <RN.Text style={{ color: "white", fontSize: 22, fontWeight: "bold", marginBottom: 20 }}>
+        Choose Theme
+      </RN.Text>
 
-      {count > 0 && (
+      {Object.keys(themes).map(key => (
         <RN.TouchableOpacity
+          key={key}
           onPress={() => {
-            storage.editedMessages = {};
-            showToast("All local edits cleared", "ic_check");
+            storage.theme = key;
+            applyTheme();
+            showToast(`${key} applied`, "ic_check");
           }}
           style={{
-            backgroundColor: "#f04747",
             padding: 16,
+            backgroundColor: storage.theme === key ? "#5865f2" : "#2b2d31",
             borderRadius: 12,
-            alignItems: "center",
+            marginBottom: 12
           }}
         >
-          <RN.Text style={{ color: "white", fontWeight: "600" }}>
-            Clear All Local Edits
+          <RN.Text style={{ color: "white", fontWeight: "600", textTransform: "capitalize" }}>
+            {key.replace("-", " ")}
           </RN.Text>
         </RN.TouchableOpacity>
-      )}
+      ))}
     </RN.ScrollView>
   );
 }
 
 export const onUnload = () => {
-  patches.forEach((p) => p?.());
+  if (styleSheet) styleSheet.remove();
 };
 
 export const settings = Settings;
