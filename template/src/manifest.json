@@ -1,10 +1,11 @@
 {
-    "name": "Local Message Editor",
-    "description": "Long-press any message → edit text only you see",
-    "authors": [{ "name": "You", "id": "210447637051080704" }],
-    "main": "src/index.js",
-    "vendetta": {
-        "icon": "ic_edit_24px"
-    },
-    "version": "1.0.0"
+  "name": "LocalMessageEditor",
+  "description": "Locally edit the displayed text of any Discord message.",
+  "authors": [
+    {
+      "name": "You"
+    }
+  ],
+  "version": "1.0.0",
+  "main": "index.js"
 }
