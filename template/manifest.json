@@ -2,7 +2,7 @@
     "name": "Local Message Editor",
     "description": "Long-press any message → edit text only you see",
     "authors": [{ "name": "You", "id": "210447637051080704" }],
-    "main": "lol.tsx",
+    "main": "src/index.js",
     "vendetta": {
         "icon": "ic_edit_24px"
     },
