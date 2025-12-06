@@ -1,161 +1,142 @@
-// ==UserScript==
-// @name         Local Message Editor
-// @author       You
-// @version      1.0.3
-// @description  Lets you locally edit any message's text (only you see it, gone on app restart)
-// @match        https://discord.com/*
-// @match        https://canary.discord.com/*
-// @match        https://ptb.discord.com/*
-// @run-at       document-start
-// ==/UserScript==
+export default {
+    name: "Local Message Editor",
+    description: "Locally edits the text of any Discord message.",
+    authors: [{ name: "You" }],
+    version: "1.0.0",
 
-import { React, ReactNative as RN } from "@vendetta/metro/common";
-import { after } from "@vendetta/patcher";
-import { storage } from "@vendetta/plugin";
-import { findByProps, findByStoreName } from "@vendetta/metro";
-import { showToast } from "@vendetta/ui/toasts";
+    storage: {
+        edits: {}
+    },
 
-const patches = [];
+    start() {
+        console.log("[LocalMessageEditor] Loaded");
 
-// Initialize storage
-storage.editedMessages ??= {};
+        // Observe DOM changes to patch newly rendered messages
+        this.mutationObserver = new MutationObserver(mutations => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    this.processNode(node);
+                }
+            }
+        });
 
-const MessageActions = findByProps("showMessageActionSheet");
-const MessageStore = findByStoreName("MessageStore");
+        this.mutationObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
 
-export const onLoad = () => {
-  // Add "Edit User Text (Local Only)" to the message long-press menu
-  patches.push(
-    after("showMessageActionSheet", MessageActions, (_, { message, navigation }) => {
-      if (!message || message.author?.id === "1") return; // skip system messages
+        // Add right-click menu entry
+        document.addEventListener(
+            "contextmenu",
+            (this.onContextMenu = (e) => {
+                const msgEl = e.target.closest("[id^='chat-messages-']");
+                if (!msgEl) return;
 
-      const options = navigation.addButton?.("options") ?? navigation.getArgument?.("options");
-      if (!Array.isArray(options)) return;
+                this.lastMessageElement = msgEl;
 
-      options.push({
-        label: "Edit User Text (Local Only)",
-        icon: "ic_edit_24px",
-        onPress: () => showEditDialog(message),
-      });
-    })
-  );
+                // Wait for Discord's menu to appear
+                setTimeout(() => this.injectEditOption(), 50);
+            })
+        );
+    },
 
-  // Patch rendered messages to show locally edited content
-  const MessageContent = findByProps("MessageContent")?.default ||
-                        findByProps("Message")?.default;
+    stop() {
+        this.mutationObserver?.disconnect();
+        document.removeEventListener("contextmenu", this.onContextMenu);
+    },
 
-  if (MessageContent) {
-    patches.push(
-      after("default", MessageContent, ([props], ret) => {
-        const msg = props?.message;
-        if (!msg?.id) return ret;
+    // -------------------------------------------------------------
+    // Inject our custom menu button
+    // -------------------------------------------------------------
+    injectEditOption() {
+        const menu = document.querySelector("[role='menu']");
+        if (!menu) return;
 
-        const edited = storage.editedMessages[msg.id];
-        if (edited === undefined) return ret;
+        // Create menu item styled like Discord's
+        const menuItem = document.createElement("div");
+        menuItem.setAttribute("role", "menuitem");
+        menuItem.className = menu.children[0]?.className || "";
+        menuItem.textContent = "Edit User Text (Local Only)";
 
-        try {
-          // Most common structures across Discord updates
-          if (ret?.props?.children?.props?.content) {
-            ret.props.children.props.content = edited;
-          }
-          if (ret?.props?.content) {
-            ret.props.content = edited;
-          }
-          if (ret?.props?.children?.props?.children?.props?.content) {
-            ret.props.children.props.children.props.content = edited;
-          }
-          // Newer structure (2025)
-          if (Array.isArray(ret?.props?.children)) {
-            const textNode = ret.props.children.find(c => c?.props?.content);
-            if (textNode) textNode.props.content = edited;
-          }
-        } catch (e) {
-          console.warn("[LocalMessageEditor] Failed to patch message render:", e);
+        menuItem.onclick = () => this.openEditor();
+
+        menu.appendChild(menuItem);
+    },
+
+    // -------------------------------------------------------------
+    // Simple editor using prompt() — works everywhere
+    // -------------------------------------------------------------
+    openEditor() {
+        const msgId = this.getMessageId(this.lastMessageElement);
+        if (!msgId) return;
+
+        const original = this.getOriginalMessageText(msgId);
+        const local = this.storage.edits[msgId] ?? original;
+
+        const edited = prompt("Edit message text (local only):", local);
+        if (edited === null) return;
+
+        if (edited.trim() === original.trim()) {
+            delete this.storage.edits[msgId];
+        } else {
+            this.storage.edits[msgId] = edited;
         }
 
-        return ret;
-      })
-    );
-  }
+        this.refresh(msgId);
+    },
 
-  showToast("Local Message Editor Loaded", "ic_check");
+    // -------------------------------------------------------------
+    // Extract message ID from DOM ID
+    // -------------------------------------------------------------
+    getMessageId(el) {
+        return (el?.id ?? "").replace("chat-messages-", "");
+    },
+
+    // -------------------------------------------------------------
+    // Read original message text from DOM
+    // -------------------------------------------------------------
+    getOriginalMessageText(msgId) {
+        const el = document.getElementById("chat-messages-" + msgId);
+        return el?.querySelector("[data-message-content]")?.textContent ?? "";
+    },
+
+    // -------------------------------------------------------------
+    // Refresh message visually so patched text appears immediately
+    // -------------------------------------------------------------
+    refresh(msgId) {
+        const el = document.getElementById("chat-messages-" + msgId);
+        if (!el) return;
+
+        el.style.opacity = "0.01";
+        setTimeout(() => {
+            el.style.opacity = "";
+            this.patchMessage(el);
+        }, 30);
+    },
+
+    // -------------------------------------------------------------
+    // Process new DOM nodes to patch messages
+    // -------------------------------------------------------------
+    processNode(node) {
+        if (!(node instanceof HTMLElement)) return;
+
+        const msgs = node.querySelectorAll?.("[id^='chat-messages-']") ?? [];
+        msgs.forEach(m => this.patchMessage(m));
+    },
+
+    // -------------------------------------------------------------
+    // Replace the displayed message text
+    // -------------------------------------------------------------
+    patchMessage(el) {
+        const msgId = this.getMessageId(el);
+        if (!msgId) return;
+
+        const newText = this.storage.edits[msgId];
+        if (!newText) return;
+
+        const content = el.querySelector("[data-message-content]");
+        if (!content) return;
+
+        content.textContent = newText;
+    }
 };
-
-function showEditDialog(message) {
-  const current = storage.editedMessages[message.id] ?? message.content ?? "";
-
-  RN.Alert.prompt(
-    "Edit Message (Local Only)",
-    "Only you see this • disappears on restart",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Save",
-        onPress: (text) => {
-          const trimmed = text?.trim();
-          if (!trimmed || trimmed === message.content) {
-            delete storage.editedMessages[message.id];
-            showToast("Edit removed", "ic_close");
-          } else {
-            storage.editedMessages[message.id] = trimmed;
-            showToast("Saved locally", "ic_check");
-          }
-
-          // Force a tiny update so the message re-renders instantly
-          setTimeout(() => {
-            try {
-              MessageStore.getState()?._actionHandler?.MESSAGE_UPDATE?.({
-                message: { ...message, edited_timestamp: new Date().toISOString() },
-              });
-            } catch {}
-          }, 100);
-        },
-      },
-    ],
-    "plain-text",
-    current,
-    "message-content"
-  );
-}
-
-export function Settings() {
-  const count = Object.keys(storage.editedMessages || {}).length;
-
-  return (
-    <RN.ScrollView style={{ flex: 1, padding: 16 }}>
-      <RN.View style={{ backgroundColor: "#2b2d31", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <RN.Text style={{ color: "#fff", fontSize: 20, fontWeight: "bold", marginBottom: 8 }}>
-          Local Message Editor
-        </RN.Text>
-        <RN.Text style={{ color: "#b5bac1" }}>
-          {count === 0 ? "No local edits yet" : `Edited ${count} message(s) locally`}
-        </RN.Text>
-      </RN.View>
-
-      {count > 0 && (
-        <RN.TouchableOpacity
-          onPress={() => {
-            storage.editedMessages = {};
-            showToast("All local edits cleared", "ic_check");
-          }}
-          style={{
-            backgroundColor: "#f04747",
-            padding: 16,
-            borderRadius: 12,
-            alignItems: "center",
-          }}
-        >
-          <RN.Text style={{ color: "white", fontWeight: "600" }}>
-            Clear All Local Edits
-          </RN.Text>
-        </RN.TouchableOpacity>
-      )}
-    </RN.ScrollView>
-  );
-}
-
-export const onUnload = () => {
-  patches.forEach((p) => p?.());
-};
-
-export const settings = Settings;
